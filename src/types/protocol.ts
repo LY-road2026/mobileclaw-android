@@ -1,0 +1,159 @@
+/**
+ * OpenClaw Gateway WebSocket Protocol Types
+ *
+ * Based on: /Users/kangarooking/Desktop/mygGit/openclaw/docs/gateway/protocol.md
+ * Schema source: src/gateway/protocol/schema/frames.ts
+ * Protocol version: 3
+ */
+
+// ─── Frame Discriminator Union ──────────────────────────────────────
+
+export type GatewayFrame = RequestFrame | ResponseFrame | EventFrame;
+
+// ─── Request Frame (Client → Server) ────────────────────────────────
+
+export interface RequestFrame {
+  type: 'req';
+  id: string;
+  method: string;
+  params?: unknown;
+}
+
+// ─── Response Frame (Server → Client) ────────────────────────────────
+
+export interface ErrorShape {
+  code: string;
+  message: string;
+  details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
+}
+
+export interface ResponseFrame {
+  type: 'res';
+  id: string;
+  ok: boolean;
+  payload?: unknown;
+  error?: ErrorShape;
+}
+
+// ─── Event Frame (Server → Client, push) ─────────────────────────────
+
+export interface EventFrame {
+  type: 'event';
+  event: string;
+  payload?: unknown;
+  seq?: number;
+  stateVersion?: { presence: number; health: number };
+}
+
+// ─── Connect Handshake ───────────────────────────────────────────────
+
+export interface ConnectChallengePayload {
+  nonce: string;
+  ts: number;
+}
+
+export interface ClientInfo {
+  id: string;           // e.g., "openclaw-ios" | "openclaw-android"
+  displayName?: string;
+  version: string;      // e.g., "1.0.0"
+  platform: string;     // "ios" | "android" | "macos"
+  deviceFamily?: string;
+  mode: 'operator' | 'node' | 'ui';
+  instanceId?: string;
+}
+
+export interface DeviceIdentity {
+  id: string;           // fingerprint-derived from public key
+  publicKey: string;    // base64-url-encoded
+  signature: string;
+  signedAt: number;
+  nonce: string;        // must match challenge nonce
+}
+
+export interface ConnectParams {
+  minProtocol: number;
+  maxProtocol: number;
+  client: ClientInfo;
+  role: 'operator' | 'node';
+  scopes?: string[];
+  caps?: string[];       // for node role: ["camera", "voice", ...]
+  commands?: string[];
+  permissions?: Record<string, boolean>;
+  auth: AuthParams;
+  locale?: string;
+  userAgent?: string;
+  device?: DeviceIdentity;
+}
+
+export interface AuthParams {
+  token?: string;
+  deviceToken?: string;
+  password?: string;
+}
+
+// ─── Hello-OK Response ───────────────────────────────────────────────
+
+export interface ServerInfo {
+  version: string;
+  connId: string;
+}
+
+export interface FeatureList {
+  methods: string[];
+  events: string[];
+}
+
+export interface HelloOkPayload {
+  type: 'hello-ok';
+  protocol: number;
+  server: ServerInfo;
+  features: FeatureList;
+  snapshot?: unknown;
+  canvasHostUrl?: string;
+  auth?: {
+    deviceToken: string;
+    role: string;
+    scopes: string[];
+    issuedAtMs?: number;
+  };
+  policy: {
+    maxPayload: number;
+    maxBufferedBytes: number;
+    tickIntervalMs: number;
+  };
+}
+
+// ─── RPC Method Payloads (commonly used) ─────────────────────────────
+
+/** send — Send a channel message (WhatsApp/SMS/etc., NOT for AI chat) */
+export interface SendParams {
+  to: string;              // Recipient (phone number, etc.)
+  channel: string;          // Channel name (whatsapp, sms, etc.)
+  message: string;
+  idempotencyKey: string;   // Deduplication key
+}
+
+/** chat.send — Send a message to the AI agent (the correct method for conversation) */
+export interface ChatSendParams {
+  sessionKey: string;       // Format: "agentId:channel:peer" (e.g., "main:webchat:mobileclaw")
+  message: string;
+  idempotencyKey: string;   // Deduplication key
+  thinking?: string;        // Optional thinking instruction
+  deliver?: boolean;         // Auto-deliver to channel
+  attachments?: Array<{     // Optional image/file attachments
+    type?: string;
+    mimeType?: string;
+    fileName?: string;
+    content?: unknown;      // base64 data
+  }>;
+  timeoutMs?: number;        // RPC timeout override
+}
+
+/** tts.convert — Convert text to speech */
+export interface TTSConvertParams {
+  text: string;
+  voiceId?: string;
+  outputFormat?: string;
+}
