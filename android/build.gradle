@@ -18,17 +18,4 @@ buildscript {
     }
 }
 
-subprojects { subproject ->
-    subproject.plugins.withId("org.jetbrains.kotlin.android") {
-        subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-            kotlinOptions {
-                freeCompilerArgs += [
-                    "-opt-in=com.facebook.react.internal.turbomodule.core.CatalystInstance",
-                    "-opt-in=com.facebook.react.internal.turbomodule.core.TurboModuleManagerDelegate",
-                ]
-            }
-        }
-    }
-}
-
 apply plugin: "com.facebook.react.rootproject"
