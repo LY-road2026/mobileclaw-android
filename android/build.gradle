@@ -18,4 +18,19 @@ buildscript {
     }
 }
 
+subprojects { subproject ->
+    subproject.plugins.withId("org.jetbrains.kotlin.android") {
+        subproject.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+            kotlinOptions {
+                // Suppress React Native internal API usage warnings in third-party libraries
+                freeCompilerArgs += [
+                    "-Xno-param-assertions",
+                    "-Xno-call-assertions",
+                    "-Xno-strip-debug-info-in-bytcode",
+                ]
+            }
+        }
+    }
+}
+
 apply plugin: "com.facebook.react.rootproject"
