@@ -14,7 +14,7 @@ import {
   Text,
   Platform,
 } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy';
+import RNFS from 'react-native-fs';
 import {
   Camera,
   useCameraDevices,
@@ -130,9 +130,7 @@ export function CameraPreview({
       if (!path) return;
 
       const normalizedPath = path.startsWith('file://') ? path : `file://${path}`;
-      const base64 = await FileSystem.readAsStringAsync(normalizedPath, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      const base64 = await RNFS.readFile(path.replace('file://', ''), 'base64');
       const timestamp = Date.now();
       log.info(`Snapshot captured: ${width}x${height}, base64=${base64.length} chars`);
       cameraManager.onNewFrame(base64, width, height, timestamp);

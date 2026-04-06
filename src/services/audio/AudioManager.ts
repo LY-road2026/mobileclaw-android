@@ -1,77 +1,52 @@
 /**
  * AudioManager — Audio session configuration + recording lifecycle
  *
- * Uses expo-av v16 for:
- *  - AVAudioSession / AudioManager platform configuration
- *  - Simultaneous record + playback (playAndRecord + voiceChat)
- *  - Audio recording with volume monitoring for waveform visualization
+ * Uses react-native-audio-api for audio context management.
+ * Recording is stubbed — see AudioCaptureBridge for actual recording implementation.
  */
 
-import { Audio } from 'expo-av';
-import { Platform } from 'react-native';
+import { AudioContext } from 'react-native-audio-api';
+import { Platform, PermissionsAndroid, Alert } from 'react-native';
 import { getLogger } from '@/utils/logger';
 
 const log = getLogger('AudioManager');
 
+let audioContext: AudioContext | null = null;
+
 export interface AudioSessionConfig {
   allowsRecordingIOS?: boolean;
   playsInSilentModeIOS?: boolean;
-  interruptionModeIOS?: number;   // InterruptionModeIOS enum value
   shouldDuckAndroid?: boolean;
-  interruptionModeAndroid?: number; // InterruptionModeAndroid enum value
 }
 
 const DEFAULT_SESSION_CONFIG: AudioSessionConfig = {
   allowsRecordingIOS: true,
   playsInSilentModeIOS: true,
-  interruptionModeIOS: 1, // InterruptionModeIOS.DoNotMix
   shouldDuckAndroid: true,
-  interruptionModeAndroid: 1, // InterruptionModeAndroid.DoNotMix
 };
 
 export class AudioManager {
   private configured = false;
-  private recording: Audio.Recording | null = null;
-  private isRecording = false;
+  private recording = false;
 
   // Volume level callback (for waveform visualization)
   private volumeListeners: Set<(level: number) => void> = new Set();
-  private volumeMonitorInterval: ReturnType<typeof setInterval> | null = null;
 
   /**
-   * Configure audio session for simultaneous recording + playback.
+   * Configure audio context.
    */
   async configureSession(config?: Partial<AudioSessionConfig>): Promise<void> {
-    const cfg = { ...DEFAULT_SESSION_CONFIG, ...config };
-
     log.info('Configuring audio session...', Platform.OS);
 
-    // Retry up to 3 times — iOS may briefly put app in background during
-    // permission dialogs (camera/mic), causing "experience in background" error.
-    const MAX_RETRIES = 3;
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: cfg.allowsRecordingIOS ?? true,
-          playsInSilentModeIOS: cfg.playsInSilentModeIOS ?? true,
-          staysActiveInBackground: false,
-          interruptionModeIOS: cfg.interruptionModeIOS ?? 1, // DoNotMix
-          shouldDuckAndroid: cfg.shouldDuckAndroid ?? true,
-          interruptionModeAndroid: cfg.interruptionModeAndroid ?? 1, // DoNotMix
-        } as any); // Cast to satisfy v16 type checking
-
-        this.configured = true;
-        log.info('Audio session configured successfully');
-        return;
-      } catch (err: any) {
-        const msg = err?.message || '';
-        if (msg.includes('background') && attempt < MAX_RETRIES - 1) {
-          log.warn(`Audio session in background (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in 500ms...`);
-          await new Promise((r) => setTimeout(r, 500));
-          continue;
-        }
-        throw err;
+    try {
+      if (!audioContext) {
+        audioContext = new AudioContext();
       }
+      this.configured = true;
+      log.info('Audio session configured successfully');
+    } catch (err) {
+      log.error('Failed to configure audio session:', err);
+      throw err;
     }
   }
 
@@ -80,80 +55,52 @@ export class AudioManager {
   }
 
   /**
-   * Request microphone permission without starting a second recorder.
+   * Request microphone permission.
    */
   async ensureMicrophonePermission(): Promise<void> {
-    const permission = await Audio.requestPermissionsAsync();
-    log.info('Mic permission result:', permission.status);
-    if (permission.status !== 'granted') {
-      const { Alert } = require('react-native');
-      Alert.alert(
-        '需要麦克风权限',
-        '请在设置中允许 MobileClaw 访问麦克风，否则无法进行语音识别。\n\n设置 → 隐私 → 麦克风',
-        [{ text: '知道了' }]
-      );
-      throw new Error(`Microphone permission ${permission.status}`);
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: '麦克风权限',
+            message: 'MobileClaw 需要访问麦克风进行语音识别',
+            buttonNeutral: '稍后询问',
+            buttonNegative: '取消',
+            buttonPositive: '允许',
+          }
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert('需要麦克风权限', '请在设置中允许 MobileClaw 访问麦克风');
+          throw new Error('Microphone permission denied');
+        }
+      } catch (err) {
+        throw err;
+      }
     }
+    // iOS: handled by react-native-audio-api
   }
 
   /**
-   * Start expo-av recording for local metering-only scenarios.
+   * Start audio recording (stubbed - actual implementation in AudioCaptureBridge).
    */
-  async startRecording(): Promise<Audio.Recording> {
-    if (this.isRecording) {
-      log.warn('Already recording, ignoring startRecording()');
-      return this.recording!;
-    }
-
-    log.info('Starting audio recording...');
-
-    try {
-      await this.ensureMicrophonePermission();
-
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HighQuality);
-      await recording.startAsync();
-
-      this.recording = recording;
-      this.isRecording = true;
-
-      // Start volume monitoring for waveform
-      this.startVolumeMonitoring();
-
-      log.info('Recording started successfully');
-      return recording;
-    } catch (error) {
-      log.error('Failed to start recording:', error);
-      throw error;
-    }
+  async startRecording(): Promise<unknown> {
+    log.info('startRecording called (stubbed)');
+    this.recording = true;
+    return null;
   }
 
   /**
-   * Stop current recording and return the recorded file URI.
+   * Stop recording.
    */
   async stopRecording(): Promise<string | null> {
-    if (!this.recording || !this.isRecording) return null;
-
-    this.stopVolumeMonitoring();
-
-    try {
-      await this.recording.stopAndUnloadAsync();
-      const uri = this.recording.getURI();
-      log.info('Recording stopped, URI:', uri);
-      this.isRecording = false;
-      this.recording = null;
-      return uri;
-    } catch (error) {
-      log.error('Error stopping recording:', error);
-      this.isRecording = false;
-      this.recording = null;
-      return null;
-    }
+    log.info('stopRecording called (stubbed)');
+    this.recording = false;
+    return null;
   }
 
-  /** Check if currently recording */
   getIsRecording(): boolean {
-    return this.isRecording;
+    return this.recording;
   }
 
   /**
@@ -169,41 +116,12 @@ export class AudioManager {
     this.volumeListeners.forEach((fn) => fn(normalized));
   }
 
-  // ─── Internal: Volume Monitoring ───────────────────────────────────
-
-  private startVolumeMonitoring(): void {
-    this.stopVolumeMonitoring();
-
-    this.volumeMonitorInterval = setInterval(async () => {
-      if (!this.recording || !this.isRecording) return;
-
-      try {
-        const status = await this.recording.getStatusAsync() as Record<string, unknown>;
-        if (status.isLoaded && 'metering' in status) {
-          const metering = status.metering as number;
-          const level = Math.max(0, Math.min(1, (metering + 60) / 60));
-          this.volumeListeners.forEach((fn) => fn(level));
-        }
-      } catch {
-        // Silently skip failed status reads
-      }
-    }, 50);
-  }
-
-  private stopVolumeMonitoring(): void {
-    if (this.volumeMonitorInterval) {
-      clearInterval(this.volumeMonitorInterval);
-      this.volumeMonitorInterval = null;
-    }
-  }
-
   destroy(): void {
-    this.stopVolumeMonitoring();
-    if (this.isRecording && this.recording) {
-      this.recording.stopAndUnloadAsync().catch(() => {});
-      this.isRecording = false;
-      this.recording = null;
+    if (audioContext) {
+      audioContext.close();
+      audioContext = null;
     }
+    this.configured = false;
   }
 }
 

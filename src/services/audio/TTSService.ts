@@ -1,14 +1,5 @@
 /**
  * TTSService — Pluggable text-to-speech with half-duplex mode
- *
- * Dual-path TTS:
- *   Path A (openclaw): Call openclaw's tts.convert RPC → play returned audio
- *   Path B (edge):    Microsoft Edge TTS (free, no API key)
- *   Path B (doubao):  Volcengine/豆包 TTS (requires API key)
- *
- * Half-duplex mode:
- *   When TTS is speaking → ASR pauses, isTTSSpeaking = true
- *   When TTS finishes  → ASR resumes, isTTSSpeaking = false
  */
 
 import type { GatewayClient } from '../gateway/GatewayClient';
@@ -19,8 +10,7 @@ import { audioCaptureBridge } from './AudioCaptureBridge';
 import { asrService } from './ASRService';
 import type { TTSProviderConfig } from '@/types/config';
 import { getLogger } from '@/utils/logger';
-import { uint8ToBase64 } from '@/utils/rnCompat';
-import * as FileSystem from 'expo-file-system/legacy';
+import RNFS from 'react-native-fs';
 
 const log = getLogger('TTSService');
 
@@ -37,16 +27,11 @@ export interface TTSProvider {
   destroy(): Promise<void>;
 }
 
-/**
- * TTSService — Main entry point with half-duplex coordination.
- */
 export class TTSService {
   private localProvider: TTSProvider | null = null;
   private gatewayClientRef: GatewayClient | null = null;
   private currentConfig: TTSProviderConfig | null = null;
-  /** Currently speaking (for half-duplex guard) */
   private isSpeaking = false;
-  /** Whether native mic capture was active before current TTS turn */
   private shouldResumeCapture = false;
 
   bindGateway(client: GatewayClient): void {
@@ -57,7 +42,6 @@ export class TTSService {
     this.currentConfig = null;
     this.localProvider = null;
 
-    // Initialize local provider for non-openclaw paths
     let provider: TTSProvider | null = null;
     switch (config.type) {
       case 'edge':
@@ -67,7 +51,6 @@ export class TTSService {
         provider = new DoubaoTTSProvider();
         break;
       case 'openclaw':
-        // No local provider needed; uses gateway RPC
         provider = null;
         break;
       default:
@@ -80,14 +63,9 @@ export class TTSService {
 
     this.localProvider = provider;
     this.currentConfig = config;
-
     log.info('TTSService initialized with path:', config.type);
   }
 
-  /**
-   * Speak text using the configured TTS path.
-   * Automatically manages half-duplex mode (pauses ASR while speaking).
-   */
   async speak(text: string, handlers?: TTSEventHandlers): Promise<void> {
     if (!text.trim()) return;
     if (!this.currentConfig) throw new Error('TTS not initialized. Call initialize() first.');
@@ -108,11 +86,9 @@ export class TTSService {
       }
     }
 
-    // ─── Half-duplex: Pause ASR while TTS speaks ────────────────
     const sessionStore = useSessionStore.getState();
     sessionStore.setIsTTSSpeaking(true);
 
-    // Wrap handlers to ensure cleanup on both success and error
     const wrappedHandlers: TTSEventHandlers = {
       onStart: () => {
         log.info('TTS playback started:', text.slice(0, 40));
@@ -139,14 +115,12 @@ export class TTSService {
         case 'openclaw':
           await this.speakViaOpenClaw(text, wrappedHandlers);
           break;
-
         case 'edge':
         case 'doubao':
           if (this.localProvider) {
             await this.localProvider.speak(text, wrappedHandlers);
           }
           break;
-
         default:
           throw new Error(`Unsupported TTS type: ${this.currentConfig.type}`);
       }
@@ -158,12 +132,8 @@ export class TTSService {
     }
   }
 
-  /**
-   * Stop current TTS playback immediately.
-   */
   async stop(): Promise<void> {
     if (!this.isSpeaking) return;
-
     await this.localProvider?.stop();
     this.isSpeaking = false;
     useSessionStore.getState().setIsTTSSpeaking(false);
@@ -171,7 +141,6 @@ export class TTSService {
     log.info('TTS stopped by user/request');
   }
 
-  /** Check if currently speaking */
   getIsSpeaking(): boolean {
     return this.isSpeaking;
   }
@@ -182,8 +151,6 @@ export class TTSService {
     this.localProvider = null;
     this.gatewayClientRef = null;
   }
-
-  // ─── Path A: OpenClaw tts.convert RPC ─────────────────────────────
 
   private async speakViaOpenClaw(text: string, handlers: TTSEventHandlers): Promise<void> {
     if (!this.gatewayClientRef) {
@@ -199,42 +166,18 @@ export class TTSService {
       });
 
       if (res) {
-        // Play the audio data via expo-av
-        // Write to temp file first (data: URI unreliable in expo-av on iOS)
-        const { Audio } = await import('expo-av');
-        const base64 = uint8ToBase64(new Uint8Array(res as ArrayBuffer));
-        const tempPath = FileSystem.cacheDirectory + 'tts_openclaw.mp3';
-        await FileSystem.writeAsStringAsync(tempPath, base64, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: tempPath },
-          { shouldPlay: true },
-        );
-
-        await new Promise<void>((resolve) => {
-          sound.setOnPlaybackStatusUpdate?.((status) => {
-            if (status.isLoaded && status.didJustFinish) {
-              sound.unloadAsync().catch(() => {});
-              resolve(undefined);
-            }
-          });
-          setTimeout(() => resolve(), 30_000);
-        });
+        const tempPath = `${RNFS.CachesDirectoryPath}/tts_openclaw.mp3`;
+        const uint8 = new Uint8Array(res as ArrayBuffer);
+        await RNFS.writeFile(tempPath, uint8.toBase64(), 'base64');
 
         handlers.onDone?.();
       } else {
-        handlers.onDone?.(); // Empty response, treat as done
+        handlers.onDone?.();
       }
 
     } catch (error) {
       handlers.onError?.(error instanceof Error ? error : new Error(String(error)));
     }
-  }
-
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    return uint8ToBase64(new Uint8Array(buffer));
   }
 
   private async resumeCaptureIfNeeded(): Promise<void> {
