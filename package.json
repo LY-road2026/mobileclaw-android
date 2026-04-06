@@ -5,8 +5,7 @@
   "scripts": {
     "start": "react-native start",
     "android": "react-native run-android",
-    "build:android": "cd android && ./gradlew assembleRelease",
-    "postinstall": "patch-package"
+    "build:android": "cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^1.24.0",
@@ -37,7 +36,6 @@
     "@types/react": "^18.3.12",
     "@types/uuid": "^10.0.0",
     "babel-plugin-module-resolver": "^5.0.3",
-    "patch-package": "^8.0.1",
     "typescript": "~5.3.3"
   },
   "private": true
